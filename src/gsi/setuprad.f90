@@ -1013,7 +1013,8 @@
 !       Non-Gaussian DA block
 !       Application for MW sensors
 
-           if (nong_solver_l .or. nong_solver_m .and. microwave .or. microwave_low) then
+           if (nong_solver_l .or. nong_solver_m) then
+           else if (microwave .or. microwave_low) then
 
                tsim(i)=log(tsim(i))
                tb_obs(i)=log(tb_obs(i))
