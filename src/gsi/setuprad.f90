@@ -192,6 +192,7 @@
 !   2017-07-27  kbathmann -introduce Rinv into the rstats computation for correlated error
 !   2018-04-04  zhu     - add additional radiance_ex_obserr and radiance_ex_biascor calls for all-sky
 !   2019-03-27  h. liu  - add ABI assimilation
+!   2020-01-23  K. Apodaca - add non-Gaussian DA elements
 !
 !  input argument list:
 !     lunin   - unit from which to read radiance (brightness temperature, tb) obs
@@ -371,7 +372,8 @@
 
   character(10) filex
   character(12) string
-
+! File(s) for additional calculations
+  character :: post_file*40
   class(obsNode),pointer:: my_node
   type(radNode),pointer:: my_head,my_headm
   type(obs_diag),pointer:: my_diag
@@ -1006,11 +1008,32 @@
               predbias(npred+2,i) = ys_bias_sst
            endif
 
+!       Non-Gaussian DA block
+!       Application for MW sensors
+
+           if (nong_solver_l .or. nong_solver_m .and. microwave .or. microwave_low) then
+
+               tsim(i)=log(tsim(i))
+               tb_obs(i)=log(tb_obs(i))
+
+!       Save observations and first guess arrays into a file to be read by
+!       linear_algebra.f90 for calculation of their diagonal and inverse transpose
+
+           write(post_file,199)mype
+199 format('obsNguess_tb_',i3.3,'.bin')
+           open(unit=200,file=trim(post_file),form='formatted',action='write')
+ 
+           write(200,*)i,tb_obs(i),tsim(i)
+
+           else
+
 !          tbc    = obs - guess after bias correction
 !          tbcnob = obs - guess before bias correction
            tbcnob(i)    = tb_obs(i) - tsim(i)  
            tbc(i)       = tbcnob(i)                     
  
+           end if
+            
            do j=1, npred-angord
               tbc(i)=tbc(i) - predbias(j,i) !obs-ges with bias correction
            end do
