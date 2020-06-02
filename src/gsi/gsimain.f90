@@ -127,6 +127,7 @@
 !   2018-02-15  wu      - add fv3_regional
 !   2017-11-29  apodaca - add information, source codes, and exit states
 !                         related to the GOES/GLM lightnig assimilation
+!   2019-01-23  apodaca - add source code related to Non-Gaussian DA
 !
 ! usage:
 !   input files:
