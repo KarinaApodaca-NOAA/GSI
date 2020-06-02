@@ -372,8 +372,10 @@
 
   character(10) filex
   character(12) string
+  
 ! File(s) for additional calculations
   character :: post_file*40
+
   class(obsNode),pointer:: my_node
   type(radNode),pointer:: my_head,my_headm
   type(obs_diag),pointer:: my_diag
