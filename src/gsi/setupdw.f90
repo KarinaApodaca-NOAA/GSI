@@ -622,10 +622,11 @@ write(6,*)'READ_LIDAR:  cdata_all read in SETUPDW : NOT EMPTY :) '
 !      with large vertical wind shear of GFS to avoid
 !      potential large simulation errors.
 !hliu------------------------------------------------------------
+! KA commented out for FMB_stats exp
 
-     wshear = (dwwindt - dwwindb) /(zobt0-zobb0)         ! m/s/m
-     if( abs(wshear) > 5.0e-3 ) muse(i) = .false.
-       data(iuse,i) = 206
+!     wshear = (dwwindt - dwwindb) /(zobt0-zobb0)         ! m/s/m
+!     if( abs(wshear) > 5.0e-3 ) muse(i) = .false.
+!       data(iuse,i) = 206
 
 !hliu-----------------------------------------------------------
 !  Apply bias corrections to L2B winds (Rayleigh and
@@ -1034,7 +1035,7 @@ write(6,*)'READ_LIDAR:  cdata_all read in SETUPDW : NOT EMPTY :) '
         rdiagbuf(16,ii) = errinv_final         ! final inverse observation error
 
         rdiagbuf(17,ii) = data(ilob,i)         ! observation
-        rdiagbuf(18,ii) = ddif0 !ddiff         ! ILIANA:O-B w/out BC ! obs-ges used in analysis 
+        rdiagbuf(18,ii) = ddif0 !ddiff         ! ILIANA:O-B w/out BC ! obs-ges used in analysis
 !KA        rdiagbuf(19,ii) = data(ilob,i)-dwwind  ! obs-ges w/o bias correction (future slot)
         rdiagbuf(19,ii) = ddiff !ddif0         ! ILIANA:O-B with Hui's 2018 BC
  
@@ -1110,7 +1111,6 @@ write(6,*)'READ_LIDAR:  cdata_all read in SETUPDW : NOT EMPTY :) '
            call nc_diag_metadata("Observation",                   sngl(data(ilob,i))          )
            call nc_diag_metadata("Obs_Minus_Forecast_adjusted_HLiuBC2018",   sngl(ddiff)      )
            call nc_diag_metadata("Obs_Minus_Forecast_unadjusted", sngl(ddif0)                 )
-
            call nc_diag_metadata("Wind_Reduction_Factor_at_10m", sngl(factw)                  )
            call nc_diag_metadata("Elevation_Angle",              sngl(data(ielva,i)*rad2deg)  )
            call nc_diag_metadata("Wind_Azimuth_Angle",           sngl(data(iazm,i)*rad2deg)   )
@@ -1245,8 +1245,7 @@ write(6,*)'READ_LIDAR:  cdata_all read in SETUPDW : NOT EMPTY :) '
      return
   end function type_ref_
 
- 
- function error_index_(kx,sub)
+  function error_index_(kx,sub)
      ! this function get the index of the 'type' dimension of the errtable array based on kx & subtype
      integer(i_kind),intent(in)  :: kx, sub
      integer(i_kind) error_index_
@@ -1299,7 +1298,7 @@ write(6,*)'READ_LIDAR:  cdata_all read in SETUPDW : NOT EMPTY :) '
     if(allocated(errtable)) deallocate(errtable)
     if(allocated(types))    deallocate(types)
   end subroutine final_vars_
-!
+
 !hliu: adopted from Mccarty ---------------
 subroutine read_L2B_bias_correction_   
 
@@ -1320,6 +1319,21 @@ file='/scratch1/NCEPDEV/da/Iliana.Genkova/prAeolus_20190501_branch/bias_correcti
 file='/scratch1/NCEPDEV/da/Iliana.Genkova/prAeolus_20190501_branch/bias_correction/2018/Mie_Bias_correction.asc',form='formatted')
    open(966, &
 file='/scratch1/NCEPDEV/da/Iliana.Genkova/prAeolus_20190501_branch/bias_correction/2018/Mie_Bias_correction.des',form='formatted')
+
+#   open(961, &
+#file='/scratch2/NAGAPE/aoml-osse/Karina.Apodaca/projects/aeolus/DATA/bias_correction/2018/Rayleigh_Bias_correction.asc1',form='formatted')
+#   open(962, &
+#file='/scratch2/NAGAPE/aoml-osse/Karina.Apodaca/projects/aeolus/DATA/bias_correction/2018/Rayleigh_Bias_correction.asc2',form='formatted')
+#   open(963, &
+#file='/scratch2/NAGAPE/aoml-osse/Karina.Apodaca/projects/aeolus/DATA/bias_correction/2018Rayleigh_Bias_correction.des1',form='formatted')
+#   open(964, &
+#file='/scratch2/NAGAPE/aoml-osse/Karina.Apodaca/projects/aeolus/DATA/bias_correction/2018/Rayleigh_Bias_correction.des2',form='formatted')
+
+#   open(965, &
+#file='/scratch2/NAGAPE/aoml-osse/Karina.Apodaca/projects/aeolus/DATA/bias_correction/2018/Mie_Bias_correction.asc',form='formatted')
+#   open(966, &
+#file='/scratch2/NAGAPE/aoml-osse/Karina.Apodaca/projects/aeolus/DATA/bias_correction/2018/Mie_Bias_correction.des',form='formatted')
+
 
     do k=2, 14
      read(961, '(19f6.1)') (brayasc1(k,n), n=1, nlats)
