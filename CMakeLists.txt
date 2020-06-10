@@ -62,7 +62,7 @@ project(GSI)
   endif()
   option(BUILD_UTIL "Build the Enkf utilities " OFF)
 
-  option(BUILD_UTIL_COM "Build community utilities " OFF)
+  option(BUILD_UTIL_COM "Build community utilities " ON) #Default OFF 
   option(BUILD_ENKF_PREPROCESS_ARW "Build enkf preprocess for ARW " OFF)
   option(BUILD_COV_CALC "Build the Desroziers utility" OFF)
   option(BUILD_NCDIAG "Build the NCDIAG libraries" ON)
