@@ -249,6 +249,7 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
 !   2015-04-01  W. Gu   - scale the bias correction term to handle the
 !                       - inter-channel correlated obs errors.
 !   2016-07-19  kbathmann - move decomposition of correlated R to outer loop.
+!   2020-01-23  K. Apodaca - add a non-Gaussian DA capability (Fletcher 2017)
 !
 !   input argument list:
 !     radhead  - obs type pointer to obs structure
@@ -303,7 +304,12 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
   type(gsi_bundle), intent(inout) :: rval
   real(r_kind),dimension(npred*jpch_rad),intent(in   ) :: spred
   real(r_quad),dimension(npred*jpch_rad),intent(inout) :: rpred
-
+! Set to public KA
+  public :: diag_st,diag_sq,diag_scw,diag_soz,diag_u,diag_st,diag_sq
+  public :: diag_scw,diag_soz,diag_u,diag_sqr,diag_sqs
+  real(r_kind),dimension(:),intent(inout) :: diag_st,diag_sq,diag_scw,diag_soz,diag_u!KA
+  real(r_kind),dimension(:),intent(inout) :: diag_v,diag_sqg,diag_sqh,diag_sqi,diag_sql!KA
+  real(r_kind),dimension(:),intent(inout) :: diag_sst,diag_sqr,diag_sqs !KA
 ! Declare local variables
   integer(i_kind) j1,j2,j3,j4,i1,i2,i3,i4,n,k,ic,ix,nn,mm
   integer(i_kind) ier,istatus
@@ -318,6 +324,7 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
   real(r_kind),pointer,dimension(:) :: sst
   real(r_kind),pointer,dimension(:) :: rt,rq,rcw,roz,ru,rv,rqg,rqh,rqi,rql,rqr,rqs
   real(r_kind),pointer,dimension(:) :: rst
+  logical :: nong_solver_l !KA
 
 !  If no rad observations return
   if(.not.associated(radhead)) return
@@ -380,6 +387,33 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
     call gsi_bundlegetpointer(sval,'qs' ,sqs,istatus)
     call gsi_bundlegetpointer(rval,'qs' ,rqs,istatus)
   end if
+ 
+! Non-Gaussian DA block based on Fletcher (2017).
+! Get control variable increments and calculte the diagonal of
+! the control variable increment vector (deltaWb=diag{xi})
+! and its transpose 
+
+  if (nong_solver_l .or. nong_solver_m) then
+
+      if(luseu)then
+             cv(j1)=su(j1)
+             cv(j2)=su(j2)
+             cv(j3)=su(j3)
+             cv(j4)=su(j4)
+             
+             call diag_cvincr(cv,j1,j2,j3,j4,diag_cv)
+             diag_su(j1)=su(j1,j1)
+             diag_su_t(j1)=transpose(diag_su(j1))
+             diag_su(j2)=su(j2,j2)
+             diag_su_t(j2)=transpose(diag_su(j2))
+             diag_su(j3)=su(j3,j3)
+             diag_su_t(j3)=transpose(diag_su(j3))
+             diag_su(j4)=su(j4,j4)
+             diag_su_t(j4)=transpose(diag_su(j4))
+      end if
+
+
+
 
   !radptr => radhead
   radptr => radNode_typecast(radhead)
@@ -392,6 +426,7 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
      w2=radptr%wij(2)
      w3=radptr%wij(3)
      w4=radptr%wij(4)
+
 !  Begin Forward model
 !  calculate temperature, q, ozone, sst vector at observation location
      i1n(1) = j1
@@ -413,56 +448,132 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
         if(luset)then
            tdir(itv+k)=  w1*  st(i1)+w2*  st(i2)+ &
                          w3*  st(i3)+w4*  st(i4)
-        endif
+        else if (nong_solver_l) then
+                 diag_st(i1)=st(i1,i1)
+                 diag_st(i2)=st(i2,i2)
+                 diag_st(i3)=st(i3,i3)
+                 diag_st(i4)=st(i4,i4)
+        end if         
+        end if
         if(luseq)then
            tdir(iqv+k)= w1*  sq(i1)+w2*  sq(i2)+ &
                         w3*  sq(i3)+w4*  sq(i4)
-        endif
+        else if (nong_solver_l) then
+                 diag_sq(i1)=sq(i1,i1)
+                 diag_sq(i2)=sq(i2,i2)
+                 diag_sq(i3)=sq(i3,i3)
+                 diag_sq(i4)=sq(i4,i4)
+        end if
+        end if
         if(luseoz)then
           tdir(ioz+k)=w1* soz(i1)+w2* soz(i2)+ &
                       w3* soz(i3)+w4* soz(i4)
+         else if (nong_solver_l) then
+                 diag_soz(i1)=soz(i1,i1)
+                 diag_soz(i2)=soz(i2,i2)
+                 diag_soz(i3)=soz(i3,i3)
+                 diag_soz(i4)=soz(i4,i4)
+        end if
         end if
         if(lusecw)then
            tdir(icw+k)=w1* scw(i1)+w2* scw(i2)+ &
                        w3* scw(i3)+w4* scw(i4)
+        else if (nong_solver_l) then
+                 diag_scw(i1)=scw(i1,i1)
+                 diag_scw(i2)=scw(i2,i2)
+                 diag_scw(i3)=scw(i3,i3)
+                 diag_scw(i4)=scw(i4,i4)
+        end if
         end if
         if(luseql)then
            tdir(iql+k)=w1* sql(i1)+w2* sql(i2)+ &
                        w3* sql(i3)+w4* sql(i4)
+        else if (nong_solver_l) then
+                 diag_sql(i1)=sql(i1,i1)
+                 diag_sql(i2)=sql(i2,i2)
+                 diag_sql(i3)=sql(i3,i3)
+                 diag_sql(i4)=sql(i4,i4)
         end if
         if(luseqi)then
            tdir(iqi+k)=w1* sqi(i1)+w2* sqi(i2)+ &
                        w3* sqi(i3)+w4* sqi(i4)
+        else if (nong_solver_l) then
+                 diag_sqi(i1)=sqi(i1,i1)
+                 diag_sqi(i2)=sqi(i2,i2)
+                 diag_sqi(i3)=sqi(i3,i3)
+                 diag_sqi(i4)=sqi(i4,i4)
+        end if
         end if
         if(luseqh)then
            tdir(iqh+k)=w1* sqh(i1)+w2* sqh(i2)+ &
                        w3* sqh(i3)+w4* sqh(i4)
+        else if (nong_solver_l) then
+                 diag_sqh(i1)=sqh(i1,i1)
+                 diag_sqh(i2)=sqh(i2,i2)
+                 diag_sqh(i3)=sqh(i3,i3)
+                 diag_sqh(i4)=sqh(i4,i4)
+        end if
         end if
         if(luseqg)then
            tdir(iqg+k)=w1* sqg(i1)+w2* sqg(i2)+ &
                        w3* sqg(i3)+w4* sqg(i4)
+        else if (nong_solver_l) then
+                 diag_sqg(i1)=sqg(i1,i1)
+                 diag_sqg(i2)=sqg(i2,i2)
+                 diag_sqg(i3)=sqg(i3,i3)
+                 diag_sqg(i4)=sqg(i4,i4)
+        end if
         end if
         if(luseqr)then
            tdir(iqr+k)=w1* sqr(i1)+w2* sqr(i2)+ &
                        w3* sqr(i3)+w4* sqr(i4)
+        else if (nong_solver_l) then
+                 diag_sqr(i1)=sqr(i1,i1)
+                 diag_sqr(i2)=sqr(i2,i2)
+                 diag_sqr(i3)=sqr(i3,i3)
+                 diag_sqr(i4)=sqr(i4,i4)
+        end if
         end if
         if(luseqs)then
            tdir(iqs+k)=w1* sqs(i1)+w2* sqs(i2)+ &
                        w3* sqs(i3)+w4* sqs(i4)
+        else if (nong_solver_l) then
+                 diag_sqs(i1)=sqs(i1,i1)
+                 diag_sqs(i2)=sqs(i2,i2)
+                 diag_sqs(i3)=sqs(i3,i3)
+                 diag_sqs(i4)=sqs(i4,i4)
         end if
-     end do
-     if(luseu)then
-        tdir(ius+1)=   w1* su(j1) +w2* su(j2)+ &
+        end if
+        if(luseu)then
+           tdir(ius+1)=w1* su(j1) +w2* su(j2)+ &
                        w3* su(j3) +w4* su(j4)
-     endif
-     if(lusev)then
-        tdir(ivs+1)=   w1* sv(j1) +w2* sv(j2)+ &
-                       w3* sv(j3) +w4* sv(j4)
-     endif
-     if(lusesst)then
-        tdir(isst+1)=w1*sst(j1) +w2*sst(j2)+ &
-                           w3*sst(j3) +w4*sst(j4)
-     end if
+        else if (nong_solver_l) then
+                 diag_su(i1)=su(i1,i1)
+                 diag_su(i2)=su(i2,i2)
+                 diag_su(i3)=su(i3,i3)
+                 diag_su(i4)=su(i4,i4)
+        end if
+        end if
+        if(lusev)then
+           tdir(ivs+1)= w1* sv(j1) +w2* sv(j2)+ &
+                        w3* sv(j3) +w4* sv(j4)
+        else if (nong_solver_l) then
+                 diag_sv(i1)=sv(i1,i1)
+                 diag_sv(i2)=sv(i2,i2)
+                 diag_sv(i3)=sv(i3,i3)
+                 diag_sv(i4)=sv(i4,i4)
+        end if
+        end if
+        if(lusesst)then
+           tdir(isst+1)=w1*sst(j1) +w2*sst(j2)+ &
+                        w3*sst(j3) +w4*sst(j4)
+        else if (nong_solver_l) then
+                 diag_sst(i1)=sst(i1,i1)
+                 diag_sst(i2)=sst(i2,i2)
+                 diag_sst(i3)=sst(i3,i3)
+                 diag_sst(i4)=sst(i4,i4)
+        end if
+        end if
 
 
 
@@ -479,7 +590,11 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
 !       Include contributions from atmospheric jacobian
         do k=1,nsigradjac
            val(nn)=val(nn)+tdir(k)*radptr%dtb_dvar(k,nn)
+           if (nong_solver_l) then !Non-Gaussian DA element
+               val(nn)=val(nn)*diag_1stguess_inv(nn)
+           end if
         end do
+
 
 !       Include contributions from remaining bias correction terms
         if( .not. ladtest_obs) then
@@ -489,11 +604,15 @@ subroutine intrad_(radhead,rval,sval,rpred,spred)
                  ix1=(ic1-1)*npred
                  do n=1,npred
                     val(nn)=val(nn)+radptr%rsqrtinv(mm,nn)*spred(ix1+n)*radptr%pred(n,mm)
+                    if (nong_solver_l) then !Non-Gaussian DA element
+                        val(nn)=val(nn)*diag_1stguess_inv(nn)
+                    end if
                  enddo
               enddo
            else
               do n=1,npred
                  val(nn)=val(nn)+spred(ix+n)*radptr%pred(n,nn)
+                 
               end do
            endif
         end if

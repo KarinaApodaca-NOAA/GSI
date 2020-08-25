@@ -922,6 +922,7 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
 !   2015-03-23  zaizhong ma - add Himawari-8 ahi
 !   2015-09-10  zhu  - generalize enabling all-sky and aerosol usage in radiance assimilation,
 !                      use n_clouds_fwd_wk,n_aerosols_fwd_wk,cld_sea_only_wk, cld_sea_only_wk,cw_cv,etc
+!   2020-01-23  K. Apodaca - add additional cloud hydrometeors to be read from the guess for nonG DA
 !
 !   input argument list:
 !     obstype      - type of observations for which to get profile
@@ -984,7 +985,7 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
   use crtm_module, only: limit_exp,o3_id
   use obsmod, only: iadate
   use aeroinfo, only: nsigaerojac
-
+ 
   implicit none
 
 ! Declare passed variables
@@ -1005,6 +1006,11 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
   real(r_kind),dimension(nchanl)        ,intent(  out), optional  :: tsim_clr      
   real(r_kind),dimension(nsigaerojac,nchanl),intent(out),optional :: jacobian_aero
   real(r_kind),dimension(nsig,nchanl)   ,intent(  out)  ,optional :: layer_od
+  real(r_kind),dimension(nn,nsig)       ,intent(  out) :: diag_tv,diag_qv,diag_oz
+  real(r_kind),dimension(nn,nsig)       ,intent(  out) :: diag_cw,diag_u,diag_v
+  real(r_kind),dimension(nn,nsig)       ,intent(  out) :: diag_sst,diag_qg,diag_qh
+  real(r_kind),dimension(nn,nsig)       ,intent(  out) :: diag_qi,diag_ql,diag_qr
+  real(r_kind),dimension(nn,nsig)       ,intent(  out) :: diag_qs !KA
 
 ! Declare local parameters
   character(len=*),parameter::myname_=myname//'*call_crtm'
@@ -1026,10 +1032,12 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
   integer(i_kind):: itsig,itsigp,itsfc,itsfcp
   integer(i_kind):: istyp00,istyp01,istyp10,istyp11
   integer(i_kind):: iqs,iozs
+  integer(i_kind):: itvs,iqvs,icws,issts,iqgs,iqhs,iqis,iqls,iqrs,iqss
   integer(i_kind):: error_status_clr
   integer(i_kind),dimension(8)::obs_time,anal_time
   integer(i_kind),dimension(msig) :: klevel
-
+  logical :: ngauss_solver_l,ngauss_solver_m !KA
+  
 ! ****************************** 
 ! Constrained indexing for lai
 ! CRTM 2.1 implementation change
@@ -1071,7 +1079,16 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
   real(r_kind),pointer,dimension(:,:,:)::tgasges_itsigp=>NULL()
   real(r_kind),pointer,dimension(:,:,:)::aeroges_itsig =>NULL()
   real(r_kind),pointer,dimension(:,:,:)::aeroges_itsigp=>NULL()
-
+  real(r_kind),pointer,dimension(:,:,:)::qgges_itsig =>NULL() 
+  real(r_kind),pointer,dimension(:,:,:)::qhges_itsig =>NULL()!KA 
+  real(r_kind),pointer,dimension(:,:,:)::qiges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:,:)::qlges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:,:)::qrges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:,:)::qsges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:,:)::qvges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:,:)::tvges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:,:)::cwges_itsig =>NULL()!KA  
+  real(r_kind),pointer,dimension(:,:  )::sst_itsig =>NULL()!KA  
   logical :: sea,icmask   
 
   integer(i_kind),parameter,dimension(12):: mday=(/0,31,59,90,&
@@ -1176,6 +1193,33 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
   call gsi_bundlegetpointer(gsi_metguess_bundle(itsigp),'q',qges_itsigp,istatus)
   iqs=iqs+istatus
 
+! Read additional fields for non-Gaussian DA application
+  
+  if (ngauss_solver_l .or. ngauss_solver_m) then
+
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'sst',sstges_itsig,istatus)
+  issts=issts+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'tv',tvges_itisig,istatus)
+  itvs=itvs+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'cw',ges_cwmr_itsig,istatus)
+  icws=icws+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'qi',qiges_itsig,istatus)
+  iqis=iqis+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'ql',qlges_itsig,istatus)
+  iqls=iqls+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'qv',qvges_itsig,istatus)
+  iqvs=iqvs+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'qr',qrges_itsig,istatus)
+  iqrs=iqrd+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'qg',qgges_itsig,istatus)
+  iqgs=iqgs+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'qh',qhges_itsig,istatus)
+  iqhs=iqhs+istatus
+  call gsi_bundlegetpointer(gsi_metguess_bundle(itsig ),'qs',qsges_itsig,istatus)
+  iqss=iqss+istatus
+
+  end if ! end of non-Gaussian DA block
+
 ! Space-time interpolation of temperature (h) and q fields from sigma files
 !$omp parallel do  schedule(dynamic,1) private(k,ii,iii)
   do k=1,nsig
@@ -1187,10 +1231,17 @@ subroutine call_crtm(obstype,obstime,data_s,nchanl,nreal,ich, &
         istyp10 = isli2(ixp,iy )
         istyp01 = isli2(ix ,iyp)
         istyp11 = isli2(ixp,iyp)
+    if(k == 1)then
+        jacobian=zero
+!    Set surface type flag.  (Same logic as in subroutine deter_sfc)
+
+        istyp00 = isli2(ix ,iy )
+        istyp10 = isli2(ixp,iy )
+        istyp01 = isli2(ix ,iyp)
+        istyp11 = isli2(ixp,iyp)
         sno00= sno2(ix ,iy ,itsfc)*dtsfc+sno2(ix ,iy ,itsfcp)*dtsfcp
         sno01= sno2(ix ,iyp,itsfc)*dtsfc+sno2(ix ,iyp,itsfcp)*dtsfcp
         sno10= sno2(ixp,iy ,itsfc)*dtsfc+sno2(ixp,iy ,itsfcp)*dtsfcp
-        sno11= sno2(ixp,iyp,itsfc)*dtsfc+sno2(ixp,iyp,itsfcp)*dtsfcp
         if(istyp00 >= 1 .and. sno00 > minsnow)istyp00 = 3
         if(istyp01 >= 1 .and. sno01 > minsnow)istyp01 = 3
         if(istyp10 >= 1 .and. sno10 > minsnow)istyp10 = 3
@@ -2174,23 +2225,186 @@ subroutine get_lai(data_s,nchanl,nreal,itime,ilate,lai_type,lai)
         IF(RJDAY.GE.DAYHF(MMM).AND.RJDAY.LT.DAYHF(MMP)) THEN
             N1=MMM
             N2=MMP
-            EXIT
-        ENDIF
-        if(mm == 2)PRINT *,'WRONG RJDAY',RJDAY
-      ENDDO
-      WEI1S = (DAYHF(N2)-RJDAY)/(DAYHF(N2)-DAYHF(N1))
-      WEI2S = (RJDAY-DAYHF(N1))/(DAYHF(N2)-DAYHF(N1))
-      IF(N2.EQ.3) N2=1
-
       lai_season(1) = lai_min(lai_type)
       lai_season(2) = lai_max(lai_type)
       if(data_s(ilate) < 0.0_r_kind) then
          lai = wei1s * lai_season(n2) + wei2s * lai_season(n1)
       else
          lai = wei1s * lai_season(n1) + wei2s * lai_season(n2)
+         lai = wei1s * lai_season(n1) + wei2s * lai_season(n2)
       endif
 
   return
   end subroutine get_lai
+  subroutine diag_bstatev(imax,jmax,kmax_q,tvges_itisig,qvges_itsig,ozges_itsigp,ges_cwmr_itsig, &
+                          uges_itsig,vges_itsig,sstges_itsig,qgges_itsig,qhges_itsig, &
+                          qiges_itsig,qlges_itsig,qrges_itsig,qhges_itsig,diag_tv, &
+                          diag_qv,diag_oz,diag_cw,diag_u,diag_v,diag_sst,diag_qg, &
+                          diag_qh,diag_qi,diag_ql,diag_qr,diag_qs)
+!$$$  subprogram documentation block
+!                .      .    .                                       .
+! subprogram:    diag_bstatev   
+!
+!   prgmmr: Karina Apodaca (karina.apodaca@noaa.gov)
+!
+! abstract: Calculate the transpose and diagonal of the background
+! state vector/guess fields [Wb^T=(diag{Xb})^T] for a non-Gaussian DA
+! application based on:
+! Fletcher, S. J.(2017). Non-Gaussian Variational Data Assimilation. In S.J.
+! Fletcher (Ed.). Data Assimilation for the Geosciences (pp. 823-868). Netherlands, 
+! United Kingdom, United States: Elsevier. 
+! Refered to as Fletcher (2017), hereafter. 
+!
+! program history log:
+!
+!   input argument list:
+!   Guess fields:
+!   tvges_itisig, qvges_itsig, ozges_itsigp,  ges_cwmr_itsig,
+!   uges_itsig, vges_itsig, sstges_itsig, qgges_itsig, qhges_itsig
+!   qiges_itsig, qlges_itsig, qrges_itsig, qhges_itsig
+!
+!   output argument list:
+!   Diagonal of the traspossed guess fields:
+!   diag_tv, diag_qv, diag_oz, diag_cw, diag_u, diag_v, diag_sst,
+!   diag_qg, diag_qh, diag_qi, diag_ql, diag_qr, diag_qs
+!
+!   language: f90 and above
+!   machine:  
+!   
+!$$$
+!--------
+  use kinds, only: r_kind,i_kind
+  use constants, only: zero
 
+  implicit none
+
+! Declare passed variables
+  integer(i_kind)                                          ::imax,jmax
+  integer(i_kind)                                          ::kmax_q
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::uges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::vges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::qges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::ozges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::qgges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::qhges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::qiges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q,intent(in)::qlges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::qrges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q,intent(in)::qsges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::qvges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::tvges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(in)::cwges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1),intent(in)::sstges_itsig
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(out) :: diag_tv,diag_qv,diag_oz
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(out) :: diag_cw,diag_u,diag_v
+  real(r_kind),dimension,(1:imax,1:jmax,1),intent(out)       :: diag_sst 
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(out) :: diag_qi,diag_ql,diag_qr
+  real(r_kind),dimension(1:imax,1:jmax,1:kmax_q),intent(out) :: diag_qs,diag_qg,diag_qh
+! Declare local variables
+  integer(i_kind) :: i,j,k
+  real(r_kind) :: tvges_t,qvges_t,ozges_t,cwges_t,uges_t,vges_t,sstges_t
+  real(r_kind) :: qgges_t,qhges_t,qiges_t,qlges_t,qrges_t,qsges_t
+
+! Transpose background/guess fields
+! 2D-fields
+  do i=1,imax
+     do j=1,jmax
+        sstges_t=sstges_itsig(i,j)
+        sstges_itsig(i,j)=sstges_itsig(j,i)
+        sstges_itsig(j,i)=sstges_t
+     end do
+  end do
+! 3D-fields
+  do k=1,kmax_q
+     do i=1,imax
+        do j=1,jmax
+           tvges_t=tvges_itisig(i,j,k)
+           tvges_itisig(i,j,k)=tvges_itisig(j,i,k)
+           tvges_itisig(j,i,k)=tvges_t
+           qvges_t=qvges_itisig(i,j,k)
+           qvges_itisig(i,j,k)=qvges_itisig(j,i,k)
+           qvges_itisig(j,i,k)=qvges_t
+           ozges_t=ozges_itisig(i,j,k)
+           ozges_itisig(i,j,k)=ozges_itisig(j,i,k)
+           ozges_itisig(j,i,k)=ozges_t 
+           cwges_t=cwges_itisig(i,j,k)
+           cwges_itisig(i,j,k)=cwges_itisig(j,i,k)
+           cwges_itisig(j,i,k)=cwges_t 
+           uges_t=uges_itisig(i,j,k)
+           uges_itisig(i,j,k)=uges_itisig(j,i,k)
+           uges_itisig(j,i,k)=uges_t 
+           vges_t=vges_itisig(i,j,k)
+           vges_itisig(i,j,k)=vges_itisig(j,i,k)
+           vges_itisig(j,i,k)=vges_t 
+           qgges_t=qgges_itisig(i,j,k)
+           qgges_itisig(i,j,k)=qgges_itisig(j,i,k)
+           qgges_itisig(j,i,k)=qgges_t 
+           qhges_t=qhges_itisig(i,j,k)
+           qhges_itisig(i,j,k)=qhges_itisig(j,i,k)
+           qhges_itisig(j,i,k)=qhges_t 
+           qiges_t=qiges_itisig(i,j,k)
+           qiges_itisig(i,j,k)=qiges_itisig(j,i,k)
+           qiges_itisig(j,i,k)=qiges_t 
+           qlges_t=qrges_itisig(i,j,k)
+           qlges_itisig(i,j,k)=qlges_itisig(j,i,k)
+           qlges_itisig(j,i,k)=qlges_t 
+           qrges_t=qrges_itisig(i,j,k)
+           qrges_itisig(i,j,k)=qrges_itisig(j,i,k)
+           qrges_itisig(j,i,k)=qrges_t
+           qsges_t=qsges_itisig(i,j,k)
+           qsges_itisig(i,j,k)=qsges_itisig(j,i,k)
+           qsges_itisig(j,i,k)=qsges_t 
+        end do
+     end do
+  end do  
+
+! Get the diagonal of the transpossed fields
+! 2D-fields
+  do i=1,imax
+     do j=1,jmax
+        if (i.eq.j) then
+            diag_sst(i,j)=sstges_itsig(j,i)
+         else
+            diag_sst(i,j)=zero 
+         end if
+      end do
+   end do
+! 3D-fields   
+  do k=1,kmax_q
+     do i=1,imax
+        do j=1,jmax
+           if (i.eq.j) then
+              diag_tv(i,j,k)=tvges_itsig(j,i,k)
+              diag_qv(i,j,k)=qvges_itsig(j,i,k)
+              diag_oz(i,j,k)=ozges_itsig(j,i,k)
+              diag_cw(i,j,k)=cwges_itsig(j,i,k)
+              diag_u(i,j,k)=uges_itsig(j,i,k)
+              diag_v(i,j,k)=vges_itsig(j,i,k)
+              diag_qg(i,j,k)=qgges_itsig(j,i,k)
+              diag_qh(i,j,k)=qhges_itsig(j,i,k)
+              diag_qi(i,j,k)=qiges_itsig(j,i,k)
+              diag_ql(i,j,k)=qlges_itsig(j,i,k)
+              diag_qr(i,j,k)=qrges_itsig(j,i,k)
+              diag_qs(i,j,k)=qsges_itsig(j,i,k)
+           else
+              diag_tv(i,j,k)=zero
+              diag_qv(i,j,k)=zero
+              diag_cw(i,j,k)=zero
+              diag_u(i,j,k)=zero
+              diag_v(i,j,k)=zero
+              diag_qg(i,j,k)=zero
+              diag_qh(i,j,k)=zero
+              diag_qi(i,j,k)=zero
+              diag_ql(i,j,k)=zero
+              diag_qr(i,j,k)=zero
+              diag_qs(i,j,k)=zero
+              diag_tv(i,j,k)=zero
+           end if 
+        end do
+     end do
+  end do
+
+  end subroutine diag_bstatev
+
+  return
   end module crtm_interface

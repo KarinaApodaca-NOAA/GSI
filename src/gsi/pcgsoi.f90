@@ -106,6 +106,7 @@ subroutine pcgsoi()
 !   2016-03-25  todling - beta-mult param now within cov (following Dave Parrish corrections)
 !   2016-05-13  parrish -  remove beta12mult.  Replace with sqrt_beta_s_mult, sqrt_beta_e_mult, inside
 !                          bkerror and bkerror_a_en.
+!   2010-01-23  Apodaca - add a non-Gaussian DA capability (Fletcher 2017) 
 !
 ! input argument list:
 !
@@ -195,6 +196,7 @@ subroutine pcgsoi()
   integer(i_kind) :: iortho
   logical :: print_verbose
   logical:: lanlerr
+  logical  nong_solver_l, nong_solver_m !KA
 
 ! Step size diagnostic strings
   data step /'good', 'SMALL'/
@@ -312,6 +314,11 @@ subroutine pcgsoi()
 !    Compare obs to solution and transpose back to grid
      call intall(sval,sbias,rval,rbias)
 
+     
+     if (nong_solver_l.or.nong_solver_m) then
+         call ng_intall(sval,diag_sval,sbias,rval,rbias)
+     end if
+
      if (iter<=1 .and. print_diag_pcg) then
         do ii=1,nobs_bins
            call prt_state_norms(rval(ii),'rval')
@@ -360,6 +367,14 @@ subroutine pcgsoi()
         gradx%values(i)=gradx%values(i)+yhatsave%values(i)
      end do
 
+! Non-Gaussian DA block KA
+
+     if (nong_solver_l.or.nong_solver_m) then
+     do i=1,nclen
+        gradx%values(i)=gradx%values(i)+(log(yhatsave%values(i))+one)
+     end do
+     end if
+
 !    Re-orthonormalization if requested
      if(iorthomax>0) then 
         iortho=min(iorthomax,iter) 
@@ -378,6 +393,11 @@ subroutine pcgsoi()
         call anbkerror(gradx,grady)
         if(lanlerr .and. lgschmidt) call mgram_schmidt(gradx,grady)
      else
+        call bkerror(gradx,grady)
+!    Non-Gaussian DA block KA
+     else if (nong_solver_l.or.nong_solver_m) then
+             gradx=gradx*diag_sval
+             grady=grady*diag_sval
         call bkerror(gradx,grady)
      end if
 

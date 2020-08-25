@@ -244,12 +244,13 @@ implicit none
 integer(i_kind)    , intent(in) :: ibin
 type(obsHeadBundle), intent(in) :: yobs
 type(gsi_bundle), intent(in   ) :: sval
+type(gsi_bundle), intent(in   ) :: diag_sval
 type(predictors), intent(in   ) :: sbias
 type(gsi_bundle), intent(inout) :: rval
 real(r_quad),dimension(max(1,nrclen)), intent(inout) :: qpred
 
 ! Declare local variables
-
+logical nong_solver_l, nong_solver_m !KA
 
 !******************************************************************************
 
@@ -311,7 +312,9 @@ real(r_quad),dimension(max(1,nrclen)), intent(inout) :: qpred
 
 ! RHS calculation for radiances
   call intrad(yobs%rad,rval,sval,qpred(1:nsclen),sbias%predr)
-
+if (nong_solver_l .or. nong_solver_m) then
+  call ng_intrad(yobs%rad,rval,sval,diag_sval,qpred(1:nsclen),sbias%predr)
+end if
 ! RHS calculation for precipitation
   call intpcp(yobs%pcp,rval,sval)
 

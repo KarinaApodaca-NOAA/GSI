@@ -196,6 +196,7 @@ if (regional) then
    do_cw_to_hydro_hwrf=lc_cw.and.ls_ql.and.ls_qi.and.ls_qr.and.ls_qs.and.ls_qg.and.ls_qh
 else
    do_cw_to_hydro=lc_cw.and.ls_tsen.and.ls_ql.and.ls_qi.and.(.not.lc_ql) !ncep global 
+   do_cw_to_hydro=lc_cw.and.ls_ql.and.ls_qi.and.ls_qr.and.ls_qs.and.ls_qg.and.ls_qh !KA FV3
 endif
 
 call gsi_bundlegetpointer (xhat%step(1),'oz',icoz,istatus)

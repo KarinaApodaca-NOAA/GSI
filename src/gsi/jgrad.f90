@@ -139,6 +139,9 @@ else
   else
      do ii=1,nobs_bins
         sval(ii)=mval(1)
+        if (nong_solver_l .eq. true) then !NonGaussian DA element
+            sval(ii)=sval(ii)-1
+        end if
      end do
   endif
 end if

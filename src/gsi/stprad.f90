@@ -138,8 +138,11 @@ subroutine stprad(radhead,dval,xval,rpred,spred,out,sges,nstep)
   real(r_kind),pointer,dimension(:) :: rt,rq,rcw,roz,ru,rv,rqg,rqh,rqi,rql,rqr,rqs
   real(r_kind),pointer,dimension(:) :: st,sq,scw,soz,su,sv,sqg,sqh,sqi,sql,sqr,sqs
   real(r_kind),pointer,dimension(:) :: rst,sst
-
+  real(r_kind),pointer,dimension(:) :: diag_st_invt,diag_sq_invt,diag_scw_invt,diag_soz_invt
+  real(r_kind),pointer,dimension(:) :: diag_su_invt,diag_sv_invt,diag_sqg_invt,diag_sqh_invt
+  real(r_kind),pointer,dimension(:) :: diag_sqi_invt,diag_sql_invt,diag_sqr_invt,diag_sqs_invt
   out=zero_quad
+  logical nong_solver_l,nong_solver_m
 
 !  If no rad data return
   if(.not. associated(radhead))return
@@ -175,7 +178,6 @@ subroutine stprad(radhead,dval,xval,rpred,spred,out,sges,nstep)
   call gsi_bundlegetpointer(dval,'qr' ,rqr,istatus)
   call gsi_bundlegetpointer(dval,'qs' ,rqs,istatus)
 
-
   tdir=zero
   rdir=zero
 
@@ -191,16 +193,36 @@ subroutine stprad(radhead,dval,xval,rpred,spred,out,sges,nstep)
            w2=radptr%wij(2)
            w3=radptr%wij(3)
            w4=radptr%wij(4)
+
+      if (nong_solver_l.or.nong_solver_m) then
+          call diag_cvincr(n,st,sq,scw,soz,sst,su,sv,sqg,sqh,sqi,sql,sqr,sqs,&
+                           ,diag_stv_invt(:),diag_sq_invt(:),diag_scw_invt(:),&
+                           diag_soz_invt(:),diag_sst_invt,diag_su_invt(:),diag_sv_invt(:),diag_sqg_invt(:),&
+                           diag_sqh_invt(:),diag_sqi_invt(:),diag_sql_invt(:),diag_sqr_invt(:),diag_sqs_invt(:))
+      end if      
+
            if(luseu)then
               tdir(ius+1)=w1* su(j1) + w2* su(j2) + w3* su(j3) + w4* su(j4)
+              if (nong_solver_l.or.nong_solver_m) then
+                  tdir(ius+1)=w1* radptr%diag_su_invt(j1)*su(j1) + w2* radptr%diag_su_invt(j2)*su(j2) + &
+                              w3* radptr%diag_su_invt(j3)*su(j3) + w4* radptr%diag_su_invt(j4)*su(j4)
+              end if
               rdir(ius+1)=w1* ru(j1) + w2* ru(j2) + w3* ru(j3) + w4* ru(j4)
            endif
            if(lusev)then
               tdir(ivs+1)=w1* sv(j1) + w2* sv(j2) + w3* sv(j3) + w4* sv(j4)
+              if (nong_solver_l.or.nong_solver_m) then
+                  tdir(ivs+1)=w1* radptr%diag_sv_invt(j1)*sv(j1) + w2* radptr%diag_sv_invt(j2)*sv(j2) + &
+                              w3* radptr%diag_sv_invt(j3)*sv(j3) + w4* radptr%diag_sv_invt(j4)*sv(j4)
+              end if     
               rdir(ivs+1)=w1* rv(j1) + w2* rv(j2) + w3* rv(j3) + w4* rv(j4)
            endif
            if (isst>=0) then
-              tdir(isst+1)=w1*sst(j1) + w2*sst(j2) + w3*sst(j3) + w4*sst(j4)   
+              tdir(isst+1)=w1*sst(j1) + w2*sst(j2) + w3*sst(j3) + w4*sst(j4)
+              if (nong_solver_l.or.nong_solver_m) then
+                  tdir(isst+1)=w1* radptr%diag_sst_invt(j1)*sst(j1) + w2* radptr%diag_sst_invt(j2)*sst(j2) + &
+                               w3* radptr%diag_sst_invt(j3)*sst(j3) + w4* radptr%diag_sst_invt(j4)*sst(j4)
+              end if    
               rdir(isst+1)=w1*rst(j1) + w2*rst(j2) + w3*rst(j3) + w4*rst(j4)   
            end if
 
@@ -224,6 +246,8 @@ subroutine stprad(radhead,dval,xval,rpred,spred,out,sges,nstep)
 !             Input search direction vector
               if(luset)then
                  tdir(itv+n)=w1* st(j1) +w2* st(j2) + w3* st(j3) +w4*  st(j4)
+              if (nong_solver_l.or.nong_solver_m) then
+              end if !AQUI ME QUEDE
                  rdir(itv+n)=w1* rt(j1) +w2* rt(j2) + w3* rt(j3) +w4*  rt(j4)
               endif
               if(luseq)then
@@ -331,6 +355,104 @@ subroutine stprad(radhead,dval,xval,rpred,spred,out,sges,nstep)
      radptr => radNode_nextcast(radptr)
   end do
   return
-end subroutine stprad
 
+end subroutine stprad
+subroutine diag_cvincr(nn,st,sq,scw,soz,sst,su,sv,sqg,sqh,sqi,sql,sqr,sqs,&
+                       ij,diag_stv_invt,diag_sq_invt,diag_scw_invt,&
+                       diag_soz_invt,diag_sst_invt,diag_su_invt,diag_sv_invt,diag_sqg_invt,&
+                       diag_sqh_invt,diag_sqi_invt,diag_sql_invt,diag_sqr_invt,diag_sqs_invt)
+!$$$  subprogram documentation block
+!                .      .    .                                       .
+! subprogram:    diag_cvincr   
+!
+!   prgmmr: Karina Apodaca (karina.apodaca@noaa.gov)
+!
+! abstract: 
+!       Calculate the diagonal, inverse, and iverse transpose of the 
+!       control variable increment [delta_Wb=(diag{delta_Xi})^-T] 
+!       for a non-Gaussian DA application based on Fletcher (2017). 
+! 
+! program history log:
+!
+!       input argument list: stv,sq,scw,soz,su,sv,sqg,sqh,sqi,sql,sqr,sqs
+!       output argument list: diag_stv_invt,diag_sq_invt,diag_scw_invt,diag_soz_invt
+!                             diag_su_invt,diag_sv_invt,diag_sqg_invt,diag_sqh_invt
+!                             diag_sqi_invt,diag_sql_invt,diag_sqr_invt,diag_sqs_invt
+!   language: f90 and above
+!   machine:  
+!   
+!$$$
+!--------
+  use kinds, only: r_kind,i_kind
+  use constants, only: zero
+  use gridmod, only: nsig
+  implicit none
+! Declare local variables
+  real(r_kind),intent(in)    :: stv(:),sq(:),scw(:),soz(:),sst(:),su(:),sv(:)
+  real(r_kind),intent(in)    :: sqg(:),sqh(:),sqi(:),sql(:),sqr(:),sqs(:)
+  integer(i_kind)            :: ij 
+  real(r_kind),intent(out)   :: diag_tv_invt(:),diag_sq_invt(:),diag_scw_invt(:),diag_soz_invt(:)
+  real(r_kind),intent(out)   :: diag_sst_invt(:),diag_su_invt(:),diag_sv_invt(:),diag_sqg_invt(:)
+  real(r_kind),intent(out)   :: diag_sqh_invt(:)
+  real(r_kind),intent(out)   :: diag_sqi_invt(:),diag_sql_invt(:),diag_sqr_invt(:),diag_sqs_invt(:)   
+  real(r_kind)               :: stv_t(:),sq_t(:),scw_t(:),soz_t(:),sst_t(:),su_t(:),sv_t(:)
+  real(r_kind)               :: sqg_t(:),sqh_t(:),sqi_t(:),sql_t(:),sqr_t(:),sqs_t(:)
+  integer(i_kind)            :: ii
+! Get the diagonal, transpose, and inverse transpose 
+  diag_stv_invt=zero; diag_sq_invt=zero; diag_scw_invt=zero ; diag_soz_invt=zero  
+  diag_sst_invt=zero; diag_su_invt=zero; diag_sv_invt=zero; diag_sqg_invt=zero; diag_sqh_invt=zero
+  diag_sqi_invt=zero; diag_sql_invt=zero; diag_sqr_invt=zero; diag_sqs_invt=zero
+
+  do ii=1,nsig
+     diag_stv(ii)=stv(ii,ii)
+     diag_stv_t(ii)=transpose(diag_stv(ii)) 
+     diag_stv_invt(ii)=-1._r_kind/diag_stv_t(ii)
+
+     diag_sq(ii)=sq(ii,ii)
+     diag_sq_t(ii)=transpose(diag_sq(ii))
+     diag_sq_invt(ii)=-1._r_kind/diag_sq(ii)
+
+     diag_scw(ii)=scw(ii,ii)
+     diag_scw_t(ii)=transpose(diag_scw(ii))
+     diag_scw_invt(ii)=-1._r_kind/diag_scw(ii)
+
+     diag_soz(ii)=soz(ii,ii)
+     diag_soz_t(ii)=transpose(diag_soz(ii))
+     diag_soz_invt(ii)=-1._r_kind/diag_soz(ii)
+
+     diag_su(ii)=su(ii,ii)
+     diag_su_t(ii)=transpose(diag_su(ii))
+     diag_su_invt(ii)=-1._r_kind/diag_su(ii)
+
+     diag_sv(ii)=sv(ii,ii)
+     diag_sv_t(ii)=transpose(diag_sv(ii))
+     diag_sv_invt(ii)=-1._r_kind/diag_sv(ii)
+
+     diag_sqg(ii)=sqg(ii,ii)
+     diag_sqg_t(ii)=transpose(diag_sqg(ii))
+     diag_sqg_invt(ii)=-1._r_kind/diag_sqg(ii)
+
+     diag_sqh(ii)=sqh(ii,ii)
+     diag_sqh_t(ii)=transpose(diag_sqh(ii))
+     diag_sqh_invt(ii)=-1._r_kind/diag_sqh(ii)
+
+     diag_sqi(ii)=sqi(ii,ii)
+     diag_sqi_t(ii)=transpose(diag_sqi(ii))
+     diag_sqi_invt(ii)=-1._r_kind/diag_sqi(ii)
+
+     diag_sql(ii)=sql(ii,ii)
+     diag_sql_t(ii)=transpose(diag_sql(ii))
+     diag_sql_invt(ii)=-1._r_kind/diag_sql(ii)
+
+     diag_sqr(ii)=sqr(ii,ii)
+     diag_sqr_t(ii)=transpose(diag_sqr(ii))
+     diag_sqr_invt(ii)=-1._r_kind/diag_sqr(ii)
+
+     diag_sqs(ii)=sqs(ii,ii)
+     diag_sqs_t(ii)=transpose(diag_sqs(ii))
+     diag_sqs_invt(ii)=-1._r_kind/diag_sqs(ii)
+
+  end do     
+return
+end subroutine diag_cvincr
 end module stpradmod

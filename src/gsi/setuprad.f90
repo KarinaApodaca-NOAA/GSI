@@ -192,7 +192,7 @@
 !   2017-07-27  kbathmann -introduce Rinv into the rstats computation for correlated error
 !   2018-04-04  zhu     - add additional radiance_ex_obserr and radiance_ex_biascor calls for all-sky
 !   2019-03-27  h. liu  - add ABI assimilation
-!   2020-01-23  K. Apodaca - add non-Gaussian DA elements
+!   2020-01-23  K. Apodaca - add non-Gaussian DA capability (Fletcher, 2017)
 !
 !  input argument list:
 !     lunin   - unit from which to read radiance (brightness temperature, tb) obs
@@ -252,7 +252,7 @@
   use crtm_interface, only: init_crtm,call_crtm,destroy_crtm,sensorindex,surface, &
       itime,ilon,ilat,ilzen_ang,ilazi_ang,iscan_ang,iscan_pos,iszen_ang,isazi_ang, &
       ifrac_sea,ifrac_lnd,ifrac_ice,ifrac_sno,itsavg, &
-      izz,idomsfc,isfcr,iff10,ilone,ilate, &
+      izz,idomsfc,isfcr,iff10,ilone,ilate,diag_bstatev, & !KA
       isst_hires,isst_navy,idata_type,iclr_sky,itref,idtw,idtc,itz_tr
   use clw_mod, only: calc_clw, ret_amsua
   use qcmod, only: qc_ssmi,qc_seviri,qc_abi,qc_ssu,qc_avhrr,qc_goesimg,qc_msu,qc_irsnd,qc_amsua,qc_mhs,qc_atms
@@ -264,6 +264,7 @@
   use radinfo, only: radinfo_adjust_jacobian
   use radiance_mod, only: rad_obs_type,radiance_obstype_search,radiance_ex_obserr,radiance_ex_biascor
   use sparsearr, only: sparr2, new, writearray, size, fullarray
+  use intrad, only: diag_cvincr !KA
 
   implicit none
 
@@ -327,7 +328,7 @@
   logical in_curbin, in_anybin, save_jacobian
   logical account_for_corr_obs
   logical,dimension(nobs):: zero_irjaco3_pole
-
+  logical nong_solver_l, nong_solver_m
 ! Declare local arrays
 
   real(r_single),dimension(ireal_radiag):: diagbuf
@@ -358,6 +359,13 @@
   real(r_kind) :: clw_guess,clw_guess_retrieval
 ! real(r_kind) :: predchan6_save   
 
+! Declare local arrays for non-Gaussian DA
+  real(r_kind),pointer :: diag_tsim_inv(:),diag_tv(:,:),diag_qv(:,:),diag_oz(:,:)
+  real(r_kind),pointer :: diag_cw(:,:),diag_u(:,:),diag_v(:,:),diag_sst(:),diag_qg(:,:)
+  real(r_kind),pointer :: diag_qh(:,:),diag_qi(:,:),diag_ql(:,:),diag_qr(:,:),diag_qs(:,:) 
+  real(r_kind),pointer :: diag_stv,diag_sqv,diag_soz,diag_scw,diag_su,diag_sv,diag_ssst
+  real(r_kind),pointer :: diag_sqg,diag_sqh,diag_sqi,diag_sql,diag_sqr,diag_sqs
+ 
   integer(i_kind),dimension(nchanl):: ich,id_qc,ich_diag
   integer(i_kind),dimension(nobs_bins) :: n_alloc
   integer(i_kind),dimension(nobs_bins) :: m_alloc
@@ -1010,24 +1018,26 @@
               predbias(npred+2,i) = ys_bias_sst
            endif
 
-!       Non-Gaussian DA block
+!       Non-Gaussian DA block 
 !       Application for MW sensors
 
            if (nong_solver_l .or. nong_solver_m) then
-           else if (microwave .or. microwave_low) then
+              if (microwave .or. microwave_low) then
+                    call diag_1stguess(tsim,nchanl,diag_tsim_inv,diag_tsim_invt)
+                    tsim(i)=diag_tsim_invt(i)*log(tsim(i))
+                    tb_obs(i)=diag_tsim_invt(i)*log(tb_obs(i))
 
-               tsim(i)=log(tsim(i))
-               tb_obs(i)=log(tb_obs(i))
 
-!       Save observations and first guess arrays into a file to be read by
-!       linear_algebra.f90 for calculation of their diagonal and inverse transpose
+! Prepare information to be sent to m_radNode.f90
 
-           write(post_file,199)mype
-199 format('obsNguess_tb_',i3.3,'.bin')
-           open(unit=200,file=trim(post_file),form='formatted',action='write')
- 
-           write(200,*)i,tb_obs(i),tsim(i)
-
+                    call diag_bstatev(tvges_itisig,qvges_itsig,ozges_itsigp,ges_cwmr_itsig,&
+                         uges_itsig,vges_itsig,sstges_itsig,qgges_itsig,qhges_itsig,&
+                         qiges_itsig,qlges_itsig,qrges_itsig,qhges_itsig,diag_tv,&
+                         diag_qv,diag_oz,diag_cw,diag_u,diag_v,diag_sst,diag_qg,&
+                         diag_qh,diag_qi,diag_ql,diag_qr,diag_qs) 
+                    call daig_cvincr
+!======================
+               end if !MW sensor conditional
            else
 
 !          tbc    = obs - guess after bias correction
@@ -1035,7 +1045,7 @@
            tbcnob(i)    = tb_obs(i) - tsim(i)  
            tbc(i)       = tbcnob(i)                     
  
-           end if
+           end if !end Non-Gaussian DA block
             
            do j=1, npred-angord
               tbc(i)=tbc(i) - predbias(j,i) !obs-ges with bias correction
@@ -1492,7 +1502,17 @@
 !          Only process observations to be assimilated
 
            if (varinv(i) > tiny_r_kind ) then
+           if (ngauss_solver_l .or. ngauss_solver_m) then
+!          Calculate the diagonal and transpose of the background 
+!          state vector [Wb^T=(diag{Xb})^T] for a non-Gaussian DA 
+!          application based on Fletcher (2017).
 
+             call diag_bstatev(tvges_itisig,qvges_itsig,ozges_itsigp,ges_cwmr_itsig, &
+                  uges_itsig,vges_itsig,sstges_itsig,qgges_itsig,qhges_itsig, &
+                    qiges_itsig, qlges_itsig,qrges_itsig,qhges_itsig,lat2,lon2, &
+                    nsig,diag_tv,diag_qv,diag_oz,diag_cw,diag_u,diag_v,diag_sst, &
+                    diag_ges)
+                
               m = ich(i)
               if(luse(n))then
                  drad    = tbc(i)   
@@ -1598,6 +1618,7 @@
               allocate(my_head%res(icc),my_head%err2(icc), &
                        my_head%raterr2(icc),my_head%pred(npred,icc), &
                        my_head%dtb_dvar(nsigradjac,icc), &
+                       my_head%diag_tsim_invt(icc), & !KA
                        my_head%ich(icc),&
                        my_head%icx(icc))
               if(luse_obsdiag)allocate(my_head%diags(icc))
@@ -2464,5 +2485,46 @@
   subroutine final_binary_diag_
   close(4)
   end subroutine final_binary_diag_
+
+  subroutine diag_1stguess(tsim,nchannl,diag_tsim,diag_tsim_inv)
+!$$$  subprogram documentation block
+!                .      .    .                                       .
+! subprogram:    diag_1stguess   
+!
+!   prgmmr: Karina Apodaca (karina.apodaca@noaa.gov)
+!
+! abstract: 
+!       Calculate the diagonal, inverse, and iverse transpose of the first guess 
+!       [Wo^-T=(diag{Hi(xb)})^-T and Wo^1=(diag{Hi(xb)})^-1] for a non-Gaussian
+!       DA application aimed at addressing background errors. 
+!       This work is based on Fletcher (2017). 
+! 
+! program history log:
+!       input argument list: tsim, nchanl
+!       output argument list: diag_tsim_inv, diag_tsim_invt
+!   language: f90 and above
+!   machine:  
+!   
+!$$$
+!--------
+  use kinds, only: r_kind,i_kind
+  use constants, only: zero
+  implicit none
+! Declare local variables
+  real(r_kind),intetnt(in) :: tsim(:)
+  real(r_kind)             :: diag_tsim(:)
+  integer(i_kind)          :: ii,nchannl
+  real(r_kind),intent(out) :: diag_tsim_inv(:),diag_tsim_invt(:)
+! Get the diagonal, transpose, and inverse 
+  diag_tsim=zero
+  diag_tsim_inv=zero
+  do ii=1,nchannl
+     diag_tsim(ii)=tsim(ii,ii)
+     diag_tsim_inv(ii)=-1._r_kind/diag_tsim(ii)
+     diag_tsim_t(ii)=transpose(diag_tsim(ii))
+     diag_tsim_invt=-1._r_kind/diag_tsim_t(ii)
+  end do
+  return
+  end subroutine diag_1stguess
  end subroutine setuprad
 

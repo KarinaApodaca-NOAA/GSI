@@ -113,6 +113,8 @@ module jfunc
   use gsi_bundlemod, only: gsi_bundle
   use gsi_bundlemod, only: gsi_bundle
   use mpeu_util, only: getindex
+  use intrad, only: diag_st,diag_sq,diag_scw,diag_soz,diag_u,diag_sst !KA
+  use intrad, only: diag_sq,diag_scw,diag_soz,diag_sqr,diag_sqs !KA
   implicit none
 
 ! set default to private
