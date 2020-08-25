@@ -1,5 +1,4 @@
 module intjomod
-
 !$$$ module documentation block
 !           .      .    .                                       .
 ! module:   intjo    module for intjo
@@ -13,6 +12,8 @@ module intjomod
 !   2015-09-03  guo     - obsmod::obs_handle has been replaced with obsHeadBundle,
 !                         defined by m_obsHeadBundle.
 !   2016-08-29  J Guo   - Separated calls to intozlay() and intozlev()
+!   2018-08-10  guo     - a new generic intjo() implementation replaced type
+!                         specific intXYZ() calls with polymorphic %intjo().
 !
 ! subroutines included:
 !   sub intjo_
@@ -25,18 +26,56 @@ module intjomod
 !
 !$$$ end documentation block
 
+use gsi_obOperTypeManager, only: obOper_count
+use gsi_obOperTypeManager, only: obOper_typeInfo
+use gsi_obOperTypeManager, only: &
+  iobOper_t,          iobOper_pw,         iobOper_q,                                                    &
+                                          iobOper_cldtot,     iobOper_w,          iobOper_dw,           &
+  iobOper_rw,         iobOper_dbz,                                                                      &
+                      iobOper_spd,        iobOper_oz,         iobOper_o3l,        iobOper_colvk,        &
+  iobOper_pm2_5,      iobOper_pm10,       iobOper_ps,         iobOper_tcp,        iobOper_sst,          &
+  iobOper_gpsbend,    iobOper_gpsref,                                                                   &
+                      iobOper_rad,        iobOper_pcp,        iobOper_aero,       iobOper_gust,         &
+  iobOper_vis,        iobOper_pblh,       iobOper_wspd10m,    iobOper_td2m,       iobOper_mxtm,         &
+  iobOper_mitm,       iobOper_pmsl,       iobOper_howv,       iobOper_tcamt,      iobOper_lcbas,        &
+  iobOper_cldch,      iobOper_uwnd10m,    iobOper_vwnd10m,    iobOper_swcp,       iobOper_lwcp,         &
+  iobOper_light
+use kinds, only: i_kind
+use mpeu_util, only: perr,die
+
 implicit none
 
 PRIVATE
 PUBLIC intjo
 
 interface intjo; module procedure &
-          intjo_
+          intjo_, intjo_reduced_
 end interface
+
+! This is a mapping to the exact %intjo() calling sequence in the earlier
+! non-polymorphic implementation, to reproduce the exactly same summation
+! ordering for rval and qpred.  It is not necessary, and can be removed once
+! some non-zero-diff modifications are introduced.
+
+integer(i_kind),parameter,dimension(obOper_count):: ix_obtype = (/ &
+  iobOper_t,          iobOper_pw,         iobOper_q,                                                    &
+                                          iobOper_cldtot,     iobOper_w,          iobOper_dw,           &
+  iobOper_rw,         iobOper_dbz,                                                                      &
+                      iobOper_spd,        iobOper_oz,         iobOper_o3l,        iobOper_colvk,        &
+  iobOper_pm2_5,      iobOper_pm10,       iobOper_ps,         iobOper_tcp,        iobOper_sst,          &
+  iobOper_gpsbend,    iobOper_gpsref,                                                                   &
+                      iobOper_rad,        iobOper_pcp,        iobOper_aero,       iobOper_gust,         &
+  iobOper_vis,        iobOper_pblh,       iobOper_wspd10m,    iobOper_td2m,       iobOper_mxtm,         &
+  iobOper_mitm,       iobOper_pmsl,       iobOper_howv,       iobOper_tcamt,      iobOper_lcbas,        &
+  iobOper_cldch,      iobOper_uwnd10m,    iobOper_vwnd10m,    iobOper_swcp,       iobOper_lwcp,         &
+  iobOper_light                                                                                         /)
+!...|....1....|....2....|....3....|....4....|....5....|....6....|....7....|....8....|....9....|....0
+
+character(len=*),parameter:: myname="intjomod"
 
 contains
 
-subroutine intjo_(yobs,rval,qpred,sval,sbias,ibin)
+subroutine intjo_(rval,qpred,sval,sbias)
 
 !$$$  subprogram documentation block
 !                .      .    .                                       .
@@ -194,53 +233,19 @@ subroutine intjo_(yobs,rval,qpred,sval,sbias,ibin)
 !   machine:  ibm RS/6000 SP
 !
 !$$$
-use kinds, only: r_kind,i_kind,r_quad
-use jfunc, only: nrclen,nsclen,npclen,ntclen
-use bias_predictors, only: predictors
-use intaodmod, only: intaod
-use inttmod, only: intt
-use intwmod, only: intw
-use intpsmod, only: intps
-use intpwmod, only: intpw
-use intqmod, only: intq
-use intradmod, only: intrad
-use inttcpmod, only: inttcp
-use intgpsmod, only: intgps
-use intrwmod, only: intrw
-use intdbzmod, only: intdbz
-use intspdmod, only: intspd
-use intsstmod, only: intsst
-use intdwmod, only: intdw
-use intpcpmod, only: intpcp
-use intozmod, only: intozlay
-use intozmod, only: intozlev
-use intcomod, only: intco
-use intpm2_5mod, only: intpm2_5
-use intpm10mod, only: intpm10
-use intlagmod, only: intlag
-use intgustmod, only: intgust
-use intvismod, only: intvis
-use intpblhmod, only: intpblh
-use intwspd10mmod, only: intwspd10m
-use inttd2mmod, only: inttd2m
-use intmxtmmod, only: intmxtm
-use intmitmmod, only: intmitm
-use intpmslmod, only: intpmsl
-use inthowvmod, only: inthowv
-use inttcamtmod, only: inttcamt
-use intlcbasmod, only: intlcbas
-use intcldchmod, only: intcldch
-use intuwnd10mmod, only: intuwnd10m
-use intvwnd10mmod, only: intvwnd10m
-use intswcpmod, only: intswcp
-use intlwcpmod, only: intlwcp
+use kinds, only: i_kind,r_quad
 use gsi_bundlemod, only: gsi_bundle
-use gsi_bundlemod, only: gsi_bundlegetpointer
+use bias_predictors, only: predictors
+use m_obsdiags, only: obOper_create
+use m_obsdiags, only: obOper_destroy
+use gsi_obOper, only: obOper
 
-use m_obsHeadBundle, only: obsHeadBundle
+use intradmod, only: setrad
+
 implicit none
 
 ! Declare passed variables
+<<<<<<< HEAD
 integer(i_kind)    , intent(in) :: ibin
 type(obsHeadBundle), intent(in) :: yobs
 type(gsi_bundle), intent(in   ) :: sval
@@ -251,9 +256,64 @@ real(r_quad),dimension(max(1,nrclen)), intent(inout) :: qpred
 
 ! Declare local variables
 logical nong_solver_l, nong_solver_m !KA
+=======
+type(gsi_bundle), dimension(  :), intent(inout) :: rval         ! (nobs_bins)
+type(gsi_bundle), dimension(  :), intent(in   ) :: sval         ! (nobs_bins)
+real(r_quad    ), dimension(:,:), intent(inout) :: qpred        ! (:,nobs_bins)
+type(predictors),                 intent(in   ) :: sbias
+
+character(len=*),parameter:: myname_=myname//"::intjo_"
+
+! Declare local variables
+integer(i_kind):: ibin,it,ix
+class(obOper),pointer:: it_obOper
+>>>>>>> upstream/master
 
 !******************************************************************************
+  call setrad(sval(1))
 
+! "RHS for jo", as it was labeled in intall().
+!$omp parallel do  schedule(dynamic,1) private(ibin,it,ix,it_obOper)
+  do ibin=1,size(sval)
+    do it=1,obOper_count
+      !ix=ix_obtype(it)  ! Use this line to ensure the same jo summartion
+                         ! sequence as intjo was in its early implementation,
+                         ! for reproducibility.
+
+      ix=it     ! Using this line, jo summation sequence is not the same as
+                ! it used to be, nor the same if someone chooses to change
+                ! enumration sequence of obOpers in gsi_obOperTypeManager.F90.
+                ! But it would make this code more portable to new obOper
+                ! extensions.
+
+      it_obOper => obOper_create(ix)
+
+        if(.not.associated(it_obOper)) then
+          call perr(myname_,'unexpected obOper, associated(it_obOper) =',associated(it_obOper))
+          call perr(myname_,'                  obOper_typeInfo(ioper) =',obOper_typeInfo(ix))
+          call perr(myname_,'                                   ioper =',ix)
+          call perr(myname_,'                                      it =',it)
+          call perr(myname_,'                            obOper_count =',obOper_count)
+          call perr(myname_,'                                    ibin =',ibin)
+          call  die(myname_)
+        endif
+
+        if(.not.associated(it_obOper%obsLL)) then
+          call perr(myname_,'unexpected component, associated(%obsLL) =',associated(it_obOper%obsLL))
+          call perr(myname_,'                  obOper_typeInfo(ioper) =',obOper_typeInfo(ix))
+          call perr(myname_,'                                   ioper =',ix)
+          call perr(myname_,'                                      it =',it)
+          call perr(myname_,'                            obOper_count =',obOper_count)
+          call perr(myname_,'                                    ibin =',ibin)
+          call  die(myname_)
+        endif
+
+      call it_obOper%intjo(ibin,rval(ibin),sval(ibin),qpred(:,ibin),sbias)
+      call obOper_destroy(it_obOper)
+    enddo
+  end do
+
+<<<<<<< HEAD
 ! RHS for conventional temperatures
   if (ntclen>0) then
      call intt(yobs%t,rval,sval,qpred(nsclen+npclen+1:nrclen),sbias%predt)
@@ -350,28 +410,39 @@ end if
 
 ! RHS for tcamt observations
   call inttcamt(yobs%tcamt,rval,sval)
-
-! RHS for lcbas observations
-  call intlcbas(yobs%lcbas,rval,sval)
-
-! RHS for cldch observations
-  call intcldch(yobs%cldch,rval,sval)
-
-! RHS for conventional uwnd10m observations
-  call intuwnd10m(yobs%uwnd10m,rval,sval)
-
-! RHS for conventional vwnd10m observations
-  call intvwnd10m(yobs%vwnd10m,rval,sval)
-
-! RHS for swcp observations
-  call intswcp(yobs%swcp,rval,sval)
-
-! RHS for lwcp observations
-  call intlwcp(yobs%lwcp,rval,sval)
-
-! Take care of background error for bias correction terms
-
+=======
 return
 end subroutine intjo_
+>>>>>>> upstream/master
+
+subroutine intjo_reduced_(rval,qpred,sval,sbias)
+  use kinds, only: i_kind,r_quad
+  use gsi_bundlemod, only: gsi_bundle
+  use bias_predictors, only: predictors
+  use constants, only: zero_quad
+  implicit none
+! Declare passed variables
+  type(gsi_bundle), dimension(:), intent(inout) :: rval
+  real(r_quad    ), dimension(:), intent(inout) :: qpred
+
+  type(gsi_bundle), dimension(:), intent(in   ) :: sval
+  type(predictors),               intent(in   ) :: sbias
+
+!----------------------------------------
+  real(kind(qpred)),allocatable,dimension(:,:):: qpred_bin
+  integer(i_kind):: ibin
+
+  allocate(qpred_bin(size(qpred),size(rval)))
+  qpred_bin=zero_quad
+
+  call intjo_(rval,qpred_bin,sval,sbias)
+
+  do ibin=1,size(rval)
+    qpred(:)=qpred(:)+qpred_bin(:,ibin)
+  enddo
+
+  deallocate(qpred_bin)
+
+end subroutine intjo_reduced_
 
 end module intjomod

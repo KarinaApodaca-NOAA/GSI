@@ -1,4 +1,12 @@
-subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_pass,conv_diagsave)
+module gpsbend_setup
+  implicit none
+  private
+  public:: setup
+        interface setup; module procedure setupbend; end interface
+
+contains
+subroutine setupbend(obsLL,odiagLL, &
+        lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_pass,conv_diagsave)
 !$$$  subprogram documentation block
 !                .      .    .                                       .
 ! subprogram:    setupbend    compute rhs of oi for gps bending angle
@@ -87,6 +95,8 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
 !   2016-06-24  guo     - fixed the default value of obsdiags(:,:)%tail%luse to luse(i)
 !                       . removed (%dlat,%dlon) debris.
 !   2016-11-29  shlyaeva - save linearized H(x) for EnKF
+!   2017-02-09  guo     - Remove m_alloc, n_alloc.
+!                       . Remove my_node with corrected typecast().
 !
 !   input argument list:
 !     lunin    - unit from which to read observations
@@ -105,28 +115,38 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   use mpeu_util, only: die,perr,tell,getindex
   use kinds, only: r_kind,i_kind
   use m_gpsStats, only: gps_allhead,gps_alltail
-  use m_obsdiags, only: gpshead
-  use obsmod , only: nprof_gps,grids_dim,lobsdiag_allocated,&
-      i_gps_ob_type,obsdiags,lobsdiagsave,nobskeep,&
+  use obsmod , only: nprof_gps,lobsdiag_allocated,&
+      lobsdiagsave,nobskeep,&
       time_offset,lobsdiag_forenkf
   use m_obsNode, only: obsNode
   use m_gpsNode , only: gpsNode
-  use m_obsLList, only: obsLList_appendNode
-  use obsmod, only: obs_diag,luse_obsdiag
+  use m_gpsNode , only: gpsNode_appendto
+  use m_obsLList, only: obsLList
+  use obsmod, only: luse_obsdiag
+  use m_obsdiagNode, only: obs_diag
+  use m_obsdiagNode, only: obs_diags
+  use m_obsdiagNode, only: obsdiagLList_appendNode
+  use m_obsdiagNode, only: obsdiagLList_nextNode
+  use m_obsdiagNode, only: obsdiagNode_init
+  use m_obsdiagNode, only: obsdiagNode_set
+  use m_obsdiagNode, only: obsdiagNode_get
+  use m_obsdiagNode, only: obsdiagNode_assert
+
 
   use gsi_4dvar, only: nobs_bins,hr_obsbin
   use guess_grids, only: ges_lnprsi,hrdifsig,geop_hgti,nfldsig
   use guess_grids, only: nsig_ext,gpstop
   use gridmod, only: nsig
   use gridmod, only: get_ij,latlon11
-  use constants, only: fv,n_a,n_b,n_c,deg2rad,tiny_r_kind,r0_01
+  use constants, only: fv,n_a,n_b,n_c,deg2rad,tiny_r_kind,r0_01,r18,r61,r63,r10000
   use constants, only: zero,half,one,two,eccentricity,semi_major_axis,&
-      grav_equator,somigliana,flattening,grav_ratio,grav,rd,eps,three,four,five
+      grav_equator,somigliana,flattening,grav_ratio,grav,rd,eps,three,four,five,&
+      r100,r400
   use lagmod, only: setq, setq_TL
   use lagmod, only: slagdw, slagdw_TL
   use jfunc, only: jiter,miter,jiterstart
   use convinfo, only: cermin,cermax,cgross,cvar_b,cvar_pg,ictype
-  use m_dtime, only: dtime_setup, dtime_check, dtime_show
+  use m_dtime, only: dtime_setup, dtime_check
 
   use m_gpsrhs, only: muse
   use m_gpsrhs, only: dbend_loc,xj
@@ -150,6 +170,8 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   implicit none
 
 ! Declare passed variables
+  type(obsLList ),target,dimension(:),intent(in):: obsLL
+  type(obs_diags),target,dimension(:),intent(in):: odiagLL
   integer(i_kind)                         ,intent(in   ) :: lunin,mype,nele,nobs
   real(r_kind),dimension(100+7*nsig)      ,intent(inout) :: awork
   real(r_kind),dimension(max(1,nprof_gps)),intent(inout) :: toss_gps_sub
@@ -166,26 +188,25 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   real(r_kind),parameter:: eight = 8.0_r_kind
   real(r_kind),parameter:: nine = 9.0_r_kind
   real(r_kind),parameter:: eleven = 11.0_r_kind
-  real(r_kind),parameter:: ds=10000.0_r_kind
   real(r_kind),parameter:: r12=12.0_r_kind
-  real(r_kind),parameter:: r18=18.0_r_kind
   real(r_kind),parameter:: r20=20.0_r_kind
   real(r_kind),parameter:: r40=40.0_r_kind
   real(r_kind),parameter:: r1em3 = 1.0e-3_r_kind
   real(r_kind),parameter:: r1em6 = 1.0e-6_r_kind
   character(len=*),parameter :: myname='setupbend'
   real(r_kind),parameter:: crit_grad = 157.0_r_kind
+  real(r_kind),parameter:: r790000=790000.0_r_kind
 
 ! Declare local variables
-
+  integer(i_kind):: grids_dim
   real(r_kind) cutoff,cutoff1,cutoff2,cutoff3,cutoff4,cutoff12,cutoff23,cutoff34
-  real(r_kind) sin2,zsges
-  real(r_kind),dimension(grids_dim):: ddnj,grid_s,ref_rad_s
+  real(r_kind) sin2,zsges,ds,ns
+  real(r_kind),dimension(:),allocatable:: ddnj,grid_s,ref_rad_s
 
   real(r_kind) rsig,rsig_up,ddbend,tmean,qmean
   real(r_kind) termg,termr,termrg,hob,dbend,grad_mod
   real(r_kind) fact,pw,nrefges1,nrefges2,nrefges3,k4,delz
-  real(r_kind) ratio,residual,obserror,obserrlm
+  real(r_kind) ratio,residual,obserror,obserrlm,cermaxuse,cerminuse,cgrossuse
   real(r_kind) errinv_input,errinv_adjst,errinv_final,err_final,repe_gps
 
   real(r_kind),dimension(nele,nobs):: data
@@ -222,15 +243,16 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   logical proceed
 
   logical:: in_curbin, in_anybin, obs_check,qc_layer_SR, save_jacobian
-  integer(i_kind),dimension(nobs_bins) :: n_alloc
-  integer(i_kind),dimension(nobs_bins) :: m_alloc
-  class(obsNode),pointer:: my_node
   type(gpsNode),pointer:: my_head
   type(obs_diag),pointer:: my_diag
+  type(obs_diags),pointer:: my_diagLL
 
   real(r_kind),allocatable,dimension(:,:,:  ) :: ges_z
   real(r_kind),allocatable,dimension(:,:,:,:) :: ges_tv
   real(r_kind),allocatable,dimension(:,:,:,:) :: ges_q
+
+  type(obsLList),pointer,dimension(:):: gpshead
+  gpshead => obsLL(:)
 
   save_jacobian = conv_diagsave .and. jiter==jiterstart .and. lobsdiag_forenkf
 
@@ -258,6 +280,7 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
 !750-755 => COSMIC-2 Equatorial
 !724-729 => COSMIC-2 Polar
 !825 => KOMPSAT-5
+!5   => MetOpC
 
 ! Check to see if required guess fields are available
   call check_vars_(proceed)
@@ -294,8 +317,12 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   nobs_out=0
   hob_s_top=one
   mm1=mype+1
-  nsigstart=min(23,nsig) 
-
+  ns=nsig/two
+  nsigstart=nint(ns)
+  ns=(r61/r63)*nsig+r18
+  grids_dim=nint(ns)  ! grid points for integration of GPS bend
+  ds=r10000
+  allocate(ddnj(grids_dim),grid_s(grids_dim),ref_rad_s(grids_dim)) 
 
 ! Allocate arrays for output to diagnostic file
   mreal=22
@@ -306,6 +333,29 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
     nind   = 3             ! number of dense subarrays 
     call new(dhx_dx, nnz, nind)
     nreal = nreal + size(dhx_dx)
+    ! jacobian sparse array indices are the same for all obs and can be filled
+    ! in once here:
+    t_ind = getindex(svars3d, 'tv')
+    if (t_ind < 0) then
+      print *, 'Error: no variable tv in state vector. Exiting.'
+      call stop2(1300)
+    endif
+    q_ind = getindex(svars3d, 'q')
+    if (q_ind < 0) then
+      print *, 'Error: no variable q in state vector. Exiting.'
+      call stop2(1300)
+    endif
+    p_ind = getindex(svars3d, 'prse')
+    if (p_ind < 0) then
+      print *, 'Error: no variable prse in state vector. Exiting.'
+      call stop2(1300)
+    endif
+    dhx_dx%st_ind(1)  = sum(levels(1:t_ind-1)) + 1
+    dhx_dx%end_ind(1) = sum(levels(1:t_ind-1)) + nsig
+    dhx_dx%st_ind(2)  = sum(levels(1:q_ind-1)) + 1
+    dhx_dx%end_ind(2) = sum(levels(1:q_ind-1)) + nsig
+    dhx_dx%st_ind(3)  = sum(levels(1:p_ind-1)) + 1
+    dhx_dx%end_ind(3) = sum(levels(1:p_ind-1)) + nsig
   endif
   if(init_pass) call gpsrhs_alloc(is,'bend',nobs,nsig,nreal,grids_dim,nsig_ext)
   call gpsrhs_aliases(is)
@@ -558,10 +608,12 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
          repe_gps=one
 
 !        UKMET-type processing
-         if((data(isatid,i)==41).or.(data(isatid,i)==722).or.&
-           (data(isatid,i)==723).or.(data(isatid,i)==4).or.(data(isatid,i)==42).or.&
-           (data(isatid,i)==3).or.(data(isatid,i)==821.or.(data(isatid,i)==421)).or.&
-           (data(isatid,i)==440).or.(data(isatid,i)==43)) then
+         if((data(isatid,i)==41) .or.(data(isatid,i)==722).or. &
+            (data(isatid,i)==723).or.(data(isatid,i)==4)  .or. & 
+            (data(isatid,i)==42) .or.(data(isatid,i)==3)  .or. &
+            (data(isatid,i)==821).or.(data(isatid,i)==421).or. &
+            (data(isatid,i)==440).or.(data(isatid,i)==43) .or. &
+            (data(isatid,i)==5)) then
                     
            if((data(ilate,i)> r40).or.(data(ilate,i)< -r40)) then
               if(alt>r12) then
@@ -686,14 +738,21 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
          data(igps,i)=data(igps,i)-dbend !innovation vector
 
          if (alt <= gpstop) then ! go into qc checks
-
+            cgrossuse=cgross(ikx)
+            cermaxuse=cermax(ikx)
+            cerminuse=cermin(ikx) 
+            if (alt > five) then
+               cgrossuse=cgrossuse*r400
+               cermaxuse=cermaxuse*r400
+               cerminuse=cerminuse*r100
+            endif
 !           Gross error check
             obserror = one/max(ratio_errors(i)*data(ier,i),tiny_r_kind)
-            obserrlm = max(cermin(ikx),min(cermax(ikx),obserror))
+            obserrlm = max(cerminuse,min(cermaxuse,obserror))
             residual = abs(data(igps,i))
             ratio    = residual/obserrlm
 
-            if (ratio > cgross(ikx)) then
+            if (ratio > cgrossuse) then
                 if (luse(i)) then
                    awork(4) = awork(4)+one
                 endif
@@ -747,7 +806,8 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
          endif
 
 !       Remove MetOP/GRAS data below 8 km
-         if((alt <= eight) .and. ((data(isatid,i)==4) .or. (data(isatid,i)==3))) then
+         if( (alt <= eight) .and. & 
+            ((data(isatid,i)==4).or.(data(isatid,i)==3).or.(data(isatid,i)==5))) then
            qcfail(i)=.true.
            data(ier,i) = zero
            ratio_errors(i) = zero
@@ -792,8 +852,6 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   endif ! (last_pass)
 
 ! Loop to load arrays used in statistics output
-  n_alloc(:)=0
-  m_alloc(:)=0
   call dtime_setup()
   do i=1,nobs
      dtime=data(itime,i)
@@ -850,67 +908,24 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
         ibin = 1
      endif
      IF (ibin<1.OR.ibin>nobs_bins) write(6,*)mype,'Error nobs_bins, ibin=',nobs_bins,ibin
+     if(luse_obsdiag) my_diagLL => odiagLL(ibin)
 
 !    Link obs to diagnostics structure
      if(luse_obsdiag)then
-       if (.not.lobsdiag_allocated) then
-          if (.not.associated(obsdiags(i_gps_ob_type,ibin)%head)) then
-             obsdiags(i_gps_ob_type,ibin)%n_alloc = 0
-             allocate(obsdiags(i_gps_ob_type,ibin)%head,stat=istat)
-             if (istat/=0) then
-                write(6,*)'setupbend: failure to allocate obsdiags',istat
-                call stop2(250)
-             end if
-             obsdiags(i_gps_ob_type,ibin)%tail => obsdiags(i_gps_ob_type,ibin)%head
-          else
-             allocate(obsdiags(i_gps_ob_type,ibin)%tail%next,stat=istat)
-             if (istat/=0) then
-                write(6,*)'setupbend: failure to allocate obsdiags',istat
-                call stop2(251)
-             end if
-             obsdiags(i_gps_ob_type,ibin)%tail => obsdiags(i_gps_ob_type,ibin)%tail%next
-          end if
-          obsdiags(i_gps_ob_type,ibin)%n_alloc = obsdiags(i_gps_ob_type,ibin)%n_alloc +1
-   
-          allocate(obsdiags(i_gps_ob_type,ibin)%tail%muse(miter+1))
-          allocate(obsdiags(i_gps_ob_type,ibin)%tail%nldepart(miter+1))
-          allocate(obsdiags(i_gps_ob_type,ibin)%tail%tldepart(miter))
-          allocate(obsdiags(i_gps_ob_type,ibin)%tail%obssen(miter))
-          obsdiags(i_gps_ob_type,ibin)%tail%indxglb=ioid(i)
-          obsdiags(i_gps_ob_type,ibin)%tail%nchnperobs=-99999
-          obsdiags(i_gps_ob_type,ibin)%tail%luse=luse(i)
-          obsdiags(i_gps_ob_type,ibin)%tail%muse(:)=.false.
-          obsdiags(i_gps_ob_type,ibin)%tail%nldepart(:)=-huge(zero)
-          obsdiags(i_gps_ob_type,ibin)%tail%tldepart(:)=zero
-          obsdiags(i_gps_ob_type,ibin)%tail%wgtjo=-huge(zero)
-          obsdiags(i_gps_ob_type,ibin)%tail%obssen(:)=zero
-   
-          n_alloc(ibin) = n_alloc(ibin) +1
-          my_diag => obsdiags(i_gps_ob_type,ibin)%tail
-          my_diag%idv = is
-          my_diag%iob = ioid(i)
-          my_diag%ich = 1
-          my_diag%elat= data(ilate,i)
-          my_diag%elon= data(ilone,i)
-   
-       else
-          if (.not.associated(obsdiags(i_gps_ob_type,ibin)%tail)) then
-             obsdiags(i_gps_ob_type,ibin)%tail => obsdiags(i_gps_ob_type,ibin)%head
-          else
-             obsdiags(i_gps_ob_type,ibin)%tail => obsdiags(i_gps_ob_type,ibin)%tail%next
-          end if
-          if (.not.associated(obsdiags(i_gps_ob_type,ibin)%tail)) then
-             call die(myname,'.not.associated(obsdiags(i_gps_ob_type,ibin)%tail)')
-          end if
-          if (obsdiags(i_gps_ob_type,ibin)%tail%indxglb/=ioid(i)) then
-             write(6,*)'setupbend: index error'
-             call stop2(252)
-          end if
-       endif
+        my_diag => obsdiagLList_nextNode(my_diagLL, &
+                create=.not.lobsdiag_allocated, & ! either make-a-new or move-to-next
+                idv=is, &
+                iob=ioid(i), &
+                ich=1, &
+                elat=data(ilate,i), &
+                elon=data(ilone,i), &
+                luse=luse(i), &
+                miter=miter)
+        if (.not.associated(my_diag)) call die(myname,'a null obsdiagLList_nextNode, create =',.not.lobsdiag_allocated)
      endif
 
      if(last_pass) then
-        if (nobskeep>0 .and. luse_obsdiag) muse(i)=obsdiags(i_gps_ob_type,ibin)%tail%muse(nobskeep)
+        if (nobskeep>0.and.luse_obsdiag) call obsdiagNode_get(my_diag, jiter=nobskeep, muse=muse(i))
 
 !       Save values needed for generate of statistics for all observations
         if(.not. associated(gps_allhead(ibin)%head))then
@@ -948,17 +963,17 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
 
 !       Fill obs diagnostics structure
         if (luse_obsdiag) then
-           obsdiags(i_gps_ob_type,ibin)%tail%muse(jiter)=muse(i)
-           obsdiags(i_gps_ob_type,ibin)%tail%nldepart(jiter)=data(igps,i)
-           obsdiags(i_gps_ob_type,ibin)%tail%wgtjo=(data(ier,i)*ratio_errors(i))**2
+          call obsdiagNode_set(my_diag,wgtjo=(data(ier,i)*ratio_errors(i))**2, &
+                jiter=jiter,muse=muse(i),nldepart=data(igps,i) )
         endif
 
 !       Load additional obs diagnostic structure
         ioff = mreal
         if (lobsdiagsave) then
+         associate(odiag => my_diag )
            do jj=1,miter
               ioff=ioff+1
-              if (obsdiags(i_gps_ob_type,ibin)%tail%muse(jj)) then
+              if (odiag%muse(jj)) then
                  rdiagbuf(ioff,i) = one
               else
                  rdiagbuf(ioff,i) = -one
@@ -966,21 +981,25 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
            enddo
            do jj=1,miter+1
               ioff=ioff+1
-              rdiagbuf(ioff,i) = obsdiags(i_gps_ob_type,ibin)%tail%nldepart(jj)
+              rdiagbuf(ioff,i) = odiag%nldepart(jj)
            enddo
            do jj=1,miter
               ioff=ioff+1
-              rdiagbuf(ioff,i) = obsdiags(i_gps_ob_type,ibin)%tail%tldepart(jj)
+              rdiagbuf(ioff,i) = odiag%tldepart(jj)
            enddo
            do jj=1,miter
               ioff=ioff+1
-              rdiagbuf(ioff,i) = obsdiags(i_gps_ob_type,ibin)%tail%obssen(jj)
+              rdiagbuf(ioff,i) = odiag%obssen(jj)
            enddo
-        endif
- 
-        do j=1,nreal
-           gps_alltail(ibin)%head%rdiag(j)= rdiagbuf(j,i)
-        end do
+         end associate  ! odiag
+       endif
+
+       ! if obs is not "acceptable" and jacobian is not computed, fill jacobian
+       ! with zeros
+       if (save_jacobian) then
+          dhx_dx%val = 0._r_kind
+          call writearray(dhx_dx, rdiagbuf(ioff+1:nreal,i))
+       endif
 
 ! If obs is "acceptable", load array with obs info for use
 ! in inner loop minimization (int* and stp* routines)
@@ -988,10 +1007,7 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
         if (in_curbin .and. muse(i)) then
 
            allocate(my_head)
-           m_alloc(ibin) = m_alloc(ibin)+1
-           my_node => my_head        ! this is a workaround
-           call obsLList_appendNode(gpshead(ibin),my_node)
-           my_node => null()
+           call gpsNode_appendto(my_head,gpshead(ibin))
 
            my_head%idv = is
            my_head%iob = ioid(i)
@@ -1121,29 +1137,7 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
            my_head%jac_p(nsig+1) = zero
 
            if (save_jacobian) then
-              t_ind = getindex(svars3d, 'tv')
-              if (t_ind < 0) then
-                 print *, 'Error: no variable tv in state vector. Exiting.'
-                 call stop2(1300)
-              endif
-              q_ind = getindex(svars3d, 'q')
-              if (q_ind < 0) then
-                 print *, 'Error: no variable q in state vector. Exiting.'
-                 call stop2(1300)
-              endif
-              p_ind = getindex(svars3d, 'prse')
-              if (p_ind < 0) then
-                 print *, 'Error: no variable prse in state vector. Exiting.'
-                 call stop2(1300)
-              endif
-
-              dhx_dx%st_ind(1)  = sum(levels(1:t_ind-1)) + 1
-              dhx_dx%end_ind(1) = sum(levels(1:t_ind-1)) + nsig
-              dhx_dx%st_ind(2)  = sum(levels(1:q_ind-1)) + 1
-              dhx_dx%end_ind(2) = sum(levels(1:q_ind-1)) + nsig
-              dhx_dx%st_ind(3)  = sum(levels(1:p_ind-1)) + 1
-              dhx_dx%end_ind(3) = sum(levels(1:p_ind-1)) + nsig
-
+              ! fill in the jacobian
               do iz = 1, nsig
                  dhx_dx%val(iz)        = my_head%jac_t(iz)
                  dhx_dx%val(iz+nsig)   = my_head%jac_q(iz)
@@ -1153,10 +1147,6 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
               call writearray(dhx_dx, rdiagbuf(ioff+1:nreal,i))
               ioff = ioff + size(dhx_dx)
            endif
-
-           do j=1,nreal
-              gps_alltail(ibin)%head%rdiag(j)= rdiagbuf(j,i)
-           end do
 
            my_head%jac_p(nsig+1) = zero
            my_head%raterr2= ratio_errors(i)**2     
@@ -1168,24 +1158,18 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
            my_head%luse   = luse(i)
 
            if (luse_obsdiag) then
-              my_head%diags => obsdiags(i_gps_ob_type,ibin)%tail
-
-              my_diag => my_head%diags
-              if(my_head%idv /= my_diag%idv .or. &
-                 my_head%iob /= my_diag%iob ) then
-                 call perr(myname,'mismatching %[head,diags]%(idv,iob,ibin) =', &
-                       (/is,i,ibin/))
-                 call perr(myname,'my_head%(idv,iob) =',(/my_head%idv,my_head%iob/))
-                 call perr(myname,'my_diag%(idv,iob) =',(/my_diag%idv,my_diag%iob/))
-                 call die(myname)
-              endif
+              call obsdiagNode_assert(my_diag, my_head%idv,my_head%iob,1,myname,'my_diag:my_head')
+              my_head%diags => my_diag
            endif
 
            my_head => null()
         end if ! (in_curbin .and. muse=1)
+        do j=1,nreal
+           gps_alltail(ibin)%head%rdiag(j)= rdiagbuf(j,i)
+        end do
      endif ! (last_pass)
   end do ! i=1,nobs
-
+  deallocate(ddnj,grid_s,ref_rad_s)
   ! Release memory of local guess arrays
   call final_vars_
 
@@ -1194,7 +1178,6 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   data_ihgt(:)=data(ihgt,:)
   data_igps(:)=data(igps,:)
 
-  call dtime_show(myname,'diagsave:bend',i_gps_ob_type)
   call gpsrhs_unaliases(is)
   if(last_pass) call gpsrhs_dealloc(is)
 
@@ -1290,3 +1273,4 @@ subroutine setupbend(lunin,mype,awork,nele,nobs,toss_gps_sub,is,init_pass,last_p
   end subroutine final_vars_
 
 end subroutine setupbend
+end module gpsbend_setup
